@@ -15,8 +15,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpMethod;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -141,10 +139,10 @@ class PhoneBookingApplicationTests {
 			}}
 		);
 
-		HttpEntity<ReturnPhone> request = new HttpEntity<>(new ReturnPhone(1, now), null);
-		PhoneDetails response = this.restTemplate.exchange("http://localhost:" + port + "/phone-booking",
-				HttpMethod.PUT, request, PhoneDetails.class).getBody();
+		ReturnPhone request = new ReturnPhone(1, now);
+		PhoneDetails response = this.restTemplate.postForObject("http://localhost:" + port + "/phone-booking/return", request, PhoneDetails.class);
 		ObjectMapper mapper = new ObjectMapper();
+
 		assertThat(mapper.writeValueAsString(response)).isEqualTo(mapper.writeValueAsString(expectedResponse));
 	}
 

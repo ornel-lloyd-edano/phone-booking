@@ -8,7 +8,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
-import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.NoSuchElementException;
@@ -63,7 +62,7 @@ public class PhoneBookingController {
 
     }
 
-    @PutMapping
+    @PostMapping("/return")
     public PhoneDetails returnPhone(@RequestBody ReturnPhone returnPhone) {
         try {
             return phoneBookingService.returnPhone(returnPhone.phoneId(), returnPhone.returnedAt().toInstant(ZoneOffset.UTC))
