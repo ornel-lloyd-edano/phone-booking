@@ -86,15 +86,17 @@ public class PhoneBookingService {
             throws PhoneNotAvailableException, InterruptedException, ExecutionException {
         phoneRepository.findById(phoneId).stream().forEach(phone -> {
             if (getAvailability(phoneId)) {
-                Booking booking = new Booking();
-                booking.setPhone(phone);
-                booking.setPhoneUser(bookedByUser);
-                booking.setAction(UserAction.BORROWED);
-                booking.setTimestamp(bookedAt.toEpochMilli());
-                bookingRepository.save(booking);
-                List<Booking> prevBookings = phone.getBookings();
-                prevBookings.add(booking);
-                phone.setBookings(prevBookings);
+                Optional.ofNullable(phoneIdLocks.get(phoneId)).stream().forEach(lock-> {
+                    Booking booking = new Booking();
+                    booking.setPhone(phone);
+                    booking.setPhoneUser(bookedByUser);
+                    booking.setAction(UserAction.BORROWED);
+                    booking.setTimestamp(bookedAt.toEpochMilli());
+                    bookingRepository.save(booking);
+                    List<Booking> prevBookings = phone.getBookings();
+                    prevBookings.add(booking);
+                    phone.setBookings(prevBookings);
+                });
             } else {
                 getMostRecentBooking(phone).stream().forEach(booking -> {
                     throw new PhoneNotAvailableException(
