@@ -11,6 +11,8 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.StreamSupport;
@@ -31,25 +33,31 @@ public class PhoneBookingService {
         return phone.getBookings().stream().max( (Booking b1, Booking b2)-> b1.getId() - b2.getId());
     }
 
-    private Map<Integer, Object> phoneIdLocks = Collections.synchronizedMap( new HashMap<>(){{
+    private Map<Integer, Object> phoneIdLocks = Collections.synchronizedMap(new HashMap<>(){{
         for (int id: IntStream.rangeClosed(1, 10).toArray()) {
             put(id, new Object());
         }
     }});
 
-    private boolean getAvailability(Integer phoneId) {
-        return Optional.ofNullable(phoneIdLocks.get(phoneId)).map(phoneLock -> {
-            synchronized (phoneLock) {
-                return phoneRepository.findById(phoneId).flatMap(phone -> getMostRecentBooking(phone))
-                    .map(recentBookedPhone-> recentBookedPhone.getAction() == UserAction.RETURNED)
-                    .orElse(true);
-            }
-        }).orElse(false);
+    private boolean getAvailability(Integer phoneId, boolean lockControlFromOutside) {
+        if (lockControlFromOutside) {
+            return phoneRepository.findById(phoneId).flatMap(phone -> getMostRecentBooking(phone))
+                .map(recentBookedPhone-> recentBookedPhone.getAction() == UserAction.RETURNED)
+                .orElse(true);
+        } else {
+            return Optional.ofNullable(phoneIdLocks.get(phoneId)).map(phoneLock -> {
+                synchronized (phoneLock) {
+                    return phoneRepository.findById(phoneId).flatMap(phone -> getMostRecentBooking(phone))
+                        .map(recentBookedPhone-> recentBookedPhone.getAction() == UserAction.RETURNED)
+                        .orElse(true);
+                }
+            }).orElse(false);
+        }
     }
 
     public CompletableFuture<Optional<BookablePhone>> getPhone(int id) {
         return CompletableFuture.supplyAsync( () -> phoneRepository.findById(id)
-            .map(phone -> BookablePhone.fromEntity(phone, getAvailability(phone.getId())) ));
+            .map(phone -> BookablePhone.fromEntity(phone, getAvailability(phone.getId(), false)) ));
     }
 
     public CompletableFuture<Optional<BookablePhone>> getPhoneWithSpecs(int id) {
@@ -64,7 +72,7 @@ public class PhoneBookingService {
     public List<BookablePhone> getPhones(boolean includeSpec) throws InterruptedException, ExecutionException {
         List<CompletableFuture<BookablePhone>> phonesWithSpec = StreamSupport.stream(phoneRepository.findAll().spliterator(), true)
             .map(phone -> {
-                BookablePhone bookablePhone = BookablePhone.fromEntity(phone, getAvailability(phone.getId()));
+                BookablePhone bookablePhone = BookablePhone.fromEntity(phone, getAvailability(phone.getId(), false));
                 if (includeSpec) {
                     return CompletableFuture.supplyAsync(() -> {
                         Optional<PhoneSpecs> phoneSpec = altPhoneSpecsProvider.getPhoneSpecs(phone.getModel());
@@ -85,34 +93,36 @@ public class PhoneBookingService {
     public Optional<BookablePhone> bookPhone(int phoneId, String bookedByUser, Instant bookedAt)
             throws PhoneNotAvailableException, InterruptedException, ExecutionException {
         phoneRepository.findById(phoneId).stream().forEach(phone -> {
-            if (getAvailability(phoneId)) {
-                Optional.ofNullable(phoneIdLocks.get(phoneId)).stream().forEach(lock-> {
-                    Booking booking = new Booking();
-                    booking.setPhone(phone);
-                    booking.setPhoneUser(bookedByUser);
-                    booking.setAction(UserAction.BORROWED);
-                    booking.setTimestamp(bookedAt.toEpochMilli());
-                    bookingRepository.save(booking);
-                    List<Booking> prevBookings = phone.getBookings();
-                    prevBookings.add(booking);
-                    phone.setBookings(prevBookings);
-                });
-            } else {
-                getMostRecentBooking(phone).stream().forEach(booking -> {
-                    throw new PhoneNotAvailableException(
-                        phone.getModel(),
-                        booking.getPhoneUser(),
-                        Instant.ofEpochMilli(booking.getTimestamp())
-                    );
-                });
-            }
+            Optional.ofNullable(phoneIdLocks.get(phoneId)).stream().forEach(phoneLock -> {
+                synchronized (phoneLock) {
+                    if (getAvailability(phoneId, true)) {
+                        Booking booking = new Booking();
+                        booking.setPhone(phone);
+                        booking.setPhoneUser(bookedByUser);
+                        booking.setAction(UserAction.BORROWED);
+                        booking.setTimestamp(bookedAt.toEpochMilli());
+                        bookingRepository.save(booking);
+                        List<Booking> prevBookings = phone.getBookings();
+                        prevBookings.add(booking);
+                        phone.setBookings(prevBookings);
+                    } else {
+                        getMostRecentBooking(phone).stream().forEach(booking -> {
+                            throw new PhoneNotAvailableException(
+                                phone.getModel(),
+                                booking.getPhoneUser(),
+                                Instant.ofEpochMilli(booking.getTimestamp())
+                            );
+                        });
+                    }
+                }
+            });
         });
         return getPhone(phoneId).get();
     }
 
     public Optional<BookablePhone> returnPhone(int phoneId, Instant returnedAt) throws InterruptedException, ExecutionException {
         phoneRepository.findById(phoneId).stream().forEach(phone -> {
-            if (!getAvailability(phoneId)) {
+            if (!getAvailability(phoneId, false)) {
                 Booking booking = new Booking();
                 Optional<Booking> lastBooking = getMostRecentBooking(phone);
                 String lastBorrower = lastBooking.map(lb -> lb.getPhoneUser()).orElse("Unknown User");
